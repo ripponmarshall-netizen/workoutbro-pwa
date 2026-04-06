@@ -1,6 +1,5 @@
 /// <reference lib="webworker" />
 /// <reference types="vite-plugin-pwa/client" />
-
 import { clientsClaim } from 'workbox-core';
 import {
   precacheAndRoute,
@@ -19,62 +18,58 @@ declare const self: ServiceWorkerGlobalScope;
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
-// Take control of already-open clients once this SW becomes active.
+// Take control immediately on activation rather than waiting for a page reload
 clientsClaim();
 
-// Remove old precaches created by previous Workbox versions/builds.
+// Clean up precache entries from old SW versions on activate
 cleanupOutdatedCaches();
 
 // ─── Precache ────────────────────────────────────────────────────────────────
 
-// Injected at build time by vite-plugin-pwa / Workbox injectManifest.
-// Do not remove.
+// __WB_MANIFEST is replaced at build time by vite-plugin-pwa with the
+// full list of versioned app shell assets (JS, CSS, HTML, fonts, icons).
+// Do NOT remove or modify this line.
 precacheAndRoute(self.__WB_MANIFEST);
 
-// ─── Navigation: app-shell fallback to precached index.html ─────────────────
-// Covers React Router client-side navigation.
-// Excludes backend routes so API/sync requests are never treated as SPA pages.
+// ─── Navigation: network-first, fall back to precached shell ─────────────────
+// This covers React Router client-side navigation.
+// If offline, the precached index.html is served so the SPA can still boot.
 
 registerRoute(
   new NavigationRoute(createHandlerBoundToURL('/index.html'), {
+    // Exclude API routes from SPA navigation handling
     denylist: [/^\/api\//, /^\/sync\//],
   }),
 );
 
-// ─── Exercise library meta stale-while-revalidate ──────────────────────
-// Fast cached reads with background refresh.
+// ─── Exercise library meta stale-while-revalidate ───────────────────────
+// Fast reads from cache, background refresh when online.
+// Applies to any /api/exercises or /api/library requests.
 
 registerRoute(
-  ({ url, request }) =>
-    request.method === 'GET' &&
-    (
-      url.pathname.startsWith('/api/exercises') ||
-      url.pathname.startsWith('/api/library') ||
-      url.pathname.startsWith('/api/muscle-groups')
-    ),
+  ({ url }) =>
+    url.pathname.startsWith('/api/exercises') ||
+    url.pathname.startsWith('/api/library') ||
+    url.pathname.startsWith('/api/muscle-groups'),
   new StaleWhileRevalidate({
     cacheName: 'wb-exercise-api-v1',
     plugins: [
       new ExpirationPlugin({
         maxEntries: 200,
         maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
-        purgeOnQuotaError: true,
       }),
     ],
   }),
 );
 
-// ─── Exercise diagrams and muscle visuals: cache-first ──────────────────────
-// Semi-static assets that should be instant once cached.
+// ─── Exercise diagrams and muscle visuals: cache-first ───────────────────────
+// These are semi-static. Serve from cache on first hit, refresh on expiry.
 
 registerRoute(
-  ({ url, request }) =>
-    request.method === 'GET' &&
-    (
-      url.pathname.startsWith('/exercise-media/') ||
-      url.pathname.startsWith('/assets/diagrams/') ||
-      url.pathname.startsWith('/assets/muscles/')
-    ),
+  ({ url }) =>
+    url.pathname.startsWith('/exercise-media/') ||
+    url.pathname.startsWith('/assets/diagrams/') ||
+    url.pathname.startsWith('/assets/muscles/'),
   new CacheFirst({
     cacheName: 'wb-exercise-media-v1',
     plugins: [
@@ -87,11 +82,10 @@ registerRoute(
   }),
 );
 
-// ─── Static assets (fonts, icons, misc asset files): cache-first ────────────
+// ─── Static assets (fonts, icons): cache-first ───────────────────────────────
 
 registerRoute(
-  ({ url, request }) =>
-    request.method === 'GET' &&
+  ({ url }) =>
     url.pathname.startsWith('/assets/') &&
     !url.pathname.startsWith('/assets/diagrams/') &&
     !url.pathname.startsWith('/assets/muscles/'),
@@ -101,22 +95,18 @@ registerRoute(
       new ExpirationPlugin({
         maxEntries: 100,
         maxAgeSeconds: 60 * 60 * 24 * 30,
-        purgeOnQuotaError: true,
       }),
     ],
   }),
 );
 
-// ─── User/account API: network-first ────────────────────────────────────────
-// Prefer fresh data, fall back to last successful cached response if offline.
+// ─── User profile / account API: network-first ───────────────────────────────
+// Prefer fresh data, fall back to last cached snapshot if offline.
 
 registerRoute(
-  ({ url, request }) =>
-    request.method === 'GET' &&
-    (
-      url.pathname.startsWith('/api/user') ||
-      url.pathname.startsWith('/api/me')
-    ),
+  ({ url }) =>
+    url.pathname.startsWith('/api/user') ||
+    url.pathname.startsWith('/api/me'),
   new NetworkFirst({
     cacheName: 'wb-user-api-v1',
     networkTimeoutSeconds: 5,
@@ -124,18 +114,19 @@ registerRoute(
       new ExpirationPlugin({
         maxEntries: 10,
         maxAgeSeconds: 60 * 60 * 24, // 1 day
-        purgeOnQuotaError: true,
       }),
     ],
   }),
 );
 
-// ─── Mutation requests: do not cache ────────────────────────────────────────
-// POST/PUT/PATCH/DELETE are not intercepted by these Workbox routes and should
-// be handled by your app's outbox / sync engine instead.
+// ─── Mutation requests: NEVER cache ──────────────────────────────────────────
+// POST/PUT/PATCH/DELETE must go through the sync queue in IndexedDB.
+// Service worker must not intercept or cache them — they have their own
+// idempotency and retry semantics in syncEngine.ts.
+// (Workbox only intercepts GET by default — this comment is for clarity.)
 
 // ─── Message handler: SKIP_WAITING ───────────────────────────────────────────
-// The UI can send this after the user accepts an update prompt.
+// The UI sends this message when the user confirms an update after a workout.
 
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
@@ -143,24 +134,19 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
 });
 
-// ─── Background Sync: outbox flush trigger ───────────────────────────────────
-// Uses a structural type instead of SyncEvent so builds do not depend on the
-// global Background Sync typings being available in TypeScript.
-//
-// This is progressive enhancement only:
-// - if Background Sync fires, notify open clients to flush;
-// - correctness should still come from app-open / reconnect flush logic.
+// ─── Background Sync: outbox flush (progressive enhancement only) ─────────────
+// This fires IF the browser supports Background Sync AND the SW was kept alive.
+// correctness does NOT depend on this. syncEngine.ts handles the primary flush
+// on app-open and on reconnect.
 
-self.addEventListener('sync', (event: ExtendableEvent & { tag?: string }) => {
+self.addEventListener('sync', (event: SyncEvent) => {
   if (event.tag === 'workoutbro-outbox-flush') {
+    // The actual flush is triggered in the app via postMessage or
+    // by syncing on next open. This event just re-activates the client.
     event.waitUntil(
-      self.clients
-        .matchAll({ type: 'window', includeUncontrolled: true })
-        .then((clients) => {
-          clients.forEach((client) => {
-            client.postMessage({ type: 'SW_SYNC_TRIGGER' });
-          });
-        }),
+      self.clients.matchAll({ type: 'window' }).then((clients) => {
+        clients.forEach((client) => client.postMessage({ type: 'SW_SYNC_TRIGGER' }));
+      }),
     );
   }
 });
