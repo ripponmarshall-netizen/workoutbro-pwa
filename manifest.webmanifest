@@ -1,0 +1,10 @@
+{
+  "name": "WorkoutBro by Gordon",
+  "short_name": "WorkoutBro",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "orientation": "portrait-primary",
+  "icons": []
+}
