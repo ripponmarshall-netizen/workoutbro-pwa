@@ -16,6 +16,13 @@ import { ExpirationPlugin } from 'workbox-expiration';
 
 declare const self: ServiceWorkerGlobalScope;
 
+// Background Sync API types are not included in TypeScript's standard
+// WebWorker lib. Declare the interface locally so tsc can compile.
+interface SyncEvent extends ExtendableEvent {
+  readonly lastChance: boolean;
+  readonly tag: string;
+}
+
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
 // Take control immediately on activation rather than waiting for a page reload
