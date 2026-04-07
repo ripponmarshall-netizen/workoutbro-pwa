@@ -14,44 +14,37 @@ import {
 } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 
-declare const self: ServiceWorkerGlobalScope;
-
-// Background Sync API types are not included in TypeScript's standard
-// WebWorker lib. Declare the interface locally so tsc can compile.
+/**
+ * Fix for "Cannot find name 'SyncEvent'" in GitHub Actions.
+ * Explicitly defining the interface ensures the compiler recognizes the type.
+ */
 interface SyncEvent extends ExtendableEvent {
   readonly lastChance: boolean;
   readonly tag: string;
 }
 
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_MANIFEST: Array<any>;
+};
+
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
-// Take control immediately on activation rather than waiting for a page reload
 clientsClaim();
-
-// Clean up precache entries from old SW versions on activate
 cleanupOutdatedCaches();
 
 // ─── Precache ────────────────────────────────────────────────────────────────
 
-// __WB_MANIFEST is replaced at build time by vite-plugin-pwa with the
-// full list of versioned app shell assets (JS, CSS, HTML, fonts, icons).
-// Do NOT remove or modify this line.
 precacheAndRoute(self.__WB_MANIFEST);
 
 // ─── Navigation: network-first, fall back to precached shell ─────────────────
-// This covers React Router client-side navigation.
-// If offline, the precached index.html is served so the SPA can still boot.
 
 registerRoute(
   new NavigationRoute(createHandlerBoundToURL('/index.html'), {
-    // Exclude API routes from SPA navigation handling
     denylist: [/^\/api\//, /^\/sync\//],
   }),
 );
 
 // ─── Exercise library meta stale-while-revalidate ───────────────────────
-// Fast reads from cache, background refresh when online.
-// Applies to any /api/exercises or /api/library requests.
 
 registerRoute(
   ({ url }) =>
@@ -70,7 +63,6 @@ registerRoute(
 );
 
 // ─── Exercise diagrams and muscle visuals: cache-first ───────────────────────
-// These are semi-static. Serve from cache on first hit, refresh on expiry.
 
 registerRoute(
   ({ url }) =>
@@ -108,7 +100,6 @@ registerRoute(
 );
 
 // ─── User profile / account API: network-first ───────────────────────────────
-// Prefer fresh data, fall back to last cached snapshot if offline.
 
 registerRoute(
   ({ url }) =>
@@ -126,14 +117,7 @@ registerRoute(
   }),
 );
 
-// ─── Mutation requests: NEVER cache ──────────────────────────────────────────
-// POST/PUT/PATCH/DELETE must go through the sync queue in IndexedDB.
-// Service worker must not intercept or cache them — they have their own
-// idempotency and retry semantics in syncEngine.ts.
-// (Workbox only intercepts GET by default — this comment is for clarity.)
-
 // ─── Message handler: SKIP_WAITING ───────────────────────────────────────────
-// The UI sends this message when the user confirms an update after a workout.
 
 self.addEventListener('message', (event: ExtendableMessageEvent) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
@@ -141,15 +125,10 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
 });
 
-// ─── Background Sync: outbox flush (progressive enhancement only) ─────────────
-// This fires IF the browser supports Background Sync AND the SW was kept alive.
-// correctness does NOT depend on this. syncEngine.ts handles the primary flush
-// on app-open and on reconnect.
+// ─── Background Sync: outbox flush ──────────────────────────────────────────
 
 self.addEventListener('sync', (event: SyncEvent) => {
   if (event.tag === 'workoutbro-outbox-flush') {
-    // The actual flush is triggered in the app via postMessage or
-    // by syncing on next open. This event just re-activates the client.
     event.waitUntil(
       self.clients.matchAll({ type: 'window' }).then((clients) => {
         clients.forEach((client) => client.postMessage({ type: 'SW_SYNC_TRIGGER' }));
