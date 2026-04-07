@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { hapticHeavy } from '../../lib/haptics';
 
 type Props = {
   startedAt: string | null;
@@ -7,11 +8,17 @@ type Props = {
 
 export function RestTimer({ startedAt, targetSeconds }: Props): JSX.Element | null {
   const [now, setNow] = useState(Date.now());
+  const firedRef = useRef(false);
 
   useEffect(() => {
     if (!startedAt || !targetSeconds) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
+  }, [startedAt, targetSeconds]);
+
+  // Reset the haptic guard whenever a new timer session begins
+  useEffect(() => {
+    firedRef.current = false;
   }, [startedAt, targetSeconds]);
 
   const view = useMemo(() => {
@@ -25,8 +32,18 @@ export function RestTimer({ startedAt, targetSeconds }: Props): JSX.Element | nu
       label: delta >= 0 ? 'Rest' : 'Overtime',
       value: `${mm}:${ss}`,
       tone: delta >= 0 ? 'var(--wb-accent)' : 'var(--wb-warning)',
+      delta,
     };
   }, [now, startedAt, targetSeconds]);
+
+  // Fire haptic once when the rest timer reaches zero
+  useEffect(() => {
+    if (!view) return;
+    if (view.delta <= 0 && !firedRef.current) {
+      firedRef.current = true;
+      hapticHeavy();
+    }
+  }, [view]);
 
   if (!view) return null;
 
