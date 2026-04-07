@@ -14,15 +14,6 @@ import {
 } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 
-/**
- * Fix for "Cannot find name 'SyncEvent'" in GitHub Actions.
- * Explicitly defining the interface ensures the compiler recognizes the type.
- */
-interface SyncEvent extends ExtendableEvent {
-  readonly lastChance: boolean;
-  readonly tag: string;
-}
-
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<any>;
 };
@@ -56,7 +47,7 @@ registerRoute(
     plugins: [
       new ExpirationPlugin({
         maxEntries: 200,
-        maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
+        maxAgeSeconds: 60 * 60 * 24 * 7,
       }),
     ],
   }),
@@ -74,7 +65,7 @@ registerRoute(
     plugins: [
       new ExpirationPlugin({
         maxEntries: 300,
-        maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+        maxAgeSeconds: 60 * 60 * 24 * 30,
         purgeOnQuotaError: true,
       }),
     ],
@@ -111,7 +102,7 @@ registerRoute(
     plugins: [
       new ExpirationPlugin({
         maxEntries: 10,
-        maxAgeSeconds: 60 * 60 * 24, // 1 day
+        maxAgeSeconds: 60 * 60 * 24,
       }),
     ],
   }),
@@ -125,13 +116,21 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   }
 });
 
-// ─── Background Sync: outbox flush ──────────────────────────────────────────
+// ─── Background Sync: outbox flush (progressive enhancement) ─────────────────
+// The Background Sync API's SyncEvent type is NOT part of TypeScript's
+// standard WebWorker lib, so we avoid referencing it as a type annotation.
+// The sync event handler receives an Event at compile time; at runtime the
+// browser provides the full SyncEvent object with .tag and .waitUntil().
 
-self.addEventListener('sync', (event: SyncEvent) => {
-  if (event.tag === 'workoutbro-outbox-flush') {
-    event.waitUntil(
+self.addEventListener('sync', (event) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const syncEvent = event as any;
+  if (syncEvent.tag === 'workoutbro-outbox-flush') {
+    syncEvent.waitUntil(
       self.clients.matchAll({ type: 'window' }).then((clients) => {
-        clients.forEach((client) => client.postMessage({ type: 'SW_SYNC_TRIGGER' }));
+        clients.forEach((client) =>
+          client.postMessage({ type: 'SW_SYNC_TRIGGER' }),
+        );
       }),
     );
   }
