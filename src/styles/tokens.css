@@ -11,8 +11,10 @@
   --wb-text-faint: #70808c;
   --wb-accent: #d4ff3f;
   --wb-accent-soft: rgba(212, 255, 63, 0.12);
+  --wb-accent-glow: 0 0 20px rgba(212, 255, 63, 0.25);
   --wb-accent-2: #53d2ff;
   --wb-success: #47d16d;
+  --wb-success-soft: rgba(71, 209, 109, 0.10);
   --wb-warning: #ffb648;
   --wb-danger: #ff6b5f;
   --wb-pr: #f39cff;
@@ -40,4 +42,8 @@
   --wb-font-3xl: 36px;
   --wb-touch-target: 48px;
   --wb-content-max: 1120px;
+  --wb-transition-fast: 120ms ease;
+  --wb-transition-base: 220ms ease-out;
+  --wb-glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  --wb-glass-highlight-strong: inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
 }
