@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { BottomNav } from '../components/layout/BottomNav';
 import { TopBar } from '../components/layout/TopBar';
+import { ToastContainer } from '../components/common/Toast';
 import { OfflineBanner } from '../components/common/OfflineBanner';
 import { UpdateBanner } from '../components/common/UpdateBanner';
 import { ErrorBoundary } from '../components/common/ErrorBoundary';
@@ -40,10 +41,13 @@ export function AppShell(): JSX.Element {
       <TopBar />
 
       <ErrorBoundary>
-        <Outlet />
+        <div key={location.pathname} className='wb-page-enter'>
+          <Outlet />
+        </div>
       </ErrorBoundary>
 
       {!hideBottomNav && <BottomNav />}
+      <ToastContainer />
     </div>
   );
 }
