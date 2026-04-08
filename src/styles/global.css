@@ -196,16 +196,10 @@ input::placeholder, textarea::placeholder { color: var(--wb-text-faint); }
 }
 
 /* ==================================================
-   PWA Banners
+   PWA Banners (from PR #5)
    ================================================== */
 
 /* --- Offline Banner --- */
-
-/*
- * Rendered at all times so the slide-up animation plays when coming back
- * online. Default state: translated above the viewport (hidden).
- * .wb-offline-banner--visible slides it into view.
- */
 .wb-offline-banner {
   position: fixed;
   top: 0;
@@ -224,7 +218,6 @@ input::placeholder, textarea::placeholder { color: var(--wb-text-faint); }
   letter-spacing: 0.01em;
   transform: translateY(-100%);
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  /* Don't intercept pointer events while hidden */
   pointer-events: none;
 }
 
@@ -234,12 +227,6 @@ input::placeholder, textarea::placeholder { color: var(--wb-text-faint); }
 }
 
 /* --- Update Banner --- */
-
-/*
- * Conditionally rendered (only when show === true), so animation only
- * needs to handle the slide-in. Sits at z-index 50 — beneath the offline
- * banner so if both are active the offline state takes visual priority.
- */
 .wb-update-banner {
   position: fixed;
   top: 0;
@@ -281,4 +268,122 @@ input::placeholder, textarea::placeholder { color: var(--wb-text-faint); }
 @keyframes wb-slide-down {
   from { transform: translateY(-100%); }
   to   { transform: translateY(0); }
+}
+
+/* ==================================================
+   Design Polish (PR #6)
+   ================================================== */
+
+/* ========= TopBar ========= */
+.wb-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-top: 4px;
+}
+.wb-topbar-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: var(--wb-accent);
+  color: #111317;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  flex-shrink: 0;
+}
+.wb-topbar-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: var(--wb-surface-2);
+  border: 1px solid var(--wb-border);
+  display: grid;
+  place-items: center;
+  color: var(--wb-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ========= Primary Button ========= */
+.wb-btn-primary {
+  min-height: 52px;
+  border-radius: 16px;
+  border: 1px solid rgba(212, 255, 63, 0.38);
+  background: var(--wb-accent);
+  color: #111317;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  padding: 0 18px;
+  box-shadow: 0 10px 24px rgba(212, 255, 63, 0.18);
+}
+
+/* ========= Secondary Button ========= */
+.wb-btn-secondary {
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--wb-border);
+  background: var(--wb-surface-2);
+  color: var(--wb-text);
+  font-weight: 700;
+  padding: 0 16px;
+}
+
+/* ========= Danger Button ========= */
+.wb-btn-danger {
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 59, 48, 0.35);
+  background: rgba(255, 59, 48, 0.15);
+  color: #ff3b30;
+  font-weight: 700;
+  padding: 0 16px;
+}
+
+/* ========= Confirm Dialog ========= */
+@keyframes wb-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes wb-scale-up {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+.wb-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 16px;
+  animation: wb-fade-in 150ms ease;
+}
+.wb-dialog {
+  background: var(--wb-surface-2);
+  border: 1px solid var(--wb-border-strong);
+  border-radius: var(--wb-radius-md);
+  padding: var(--wb-space-4);
+  width: 100%;
+  max-width: 400px;
+  animation: wb-scale-up 150ms ease;
+}
+.wb-dialog-title {
+  margin: 0 0 8px;
+  font-size: var(--wb-font-lg);
+  letter-spacing: -0.02em;
+}
+.wb-dialog-message {
+  color: var(--wb-text-muted);
+  margin: 0 0 20px;
+  font-size: var(--wb-font-sm);
+}
+.wb-dialog-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
 }
