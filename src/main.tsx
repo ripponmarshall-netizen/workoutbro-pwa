@@ -12,11 +12,11 @@ async function bootstrap() {
   await seedDatabaseIfEmpty();
 
   registerServiceWorker(
-    // onUpdateReady — called when a new SW is waiting.
-    // TODO: dispatch to a global UI store/state so the app can show
-    // an update banner that respects active workout state.
+    // onUpdateReady — a new SW version is installed and waiting.
+    // Dispatch a DOM event so AppShell can surface the update banner at the
+    // right moment (it has the workout-active context to decide when to show).
     () => {
-      console.info('[WorkoutBro] App update ready. Will prompt after workout.');
+      window.dispatchEvent(new Event('sw-update-ready'));
     },
     // onSyncTrigger — called when Background Sync wakes the app.
     () => {
