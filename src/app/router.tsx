@@ -8,6 +8,7 @@ import { AddExerciseScreen } from '../screens/AddExerciseScreen';
 import { ExerciseDetailScreen } from '../screens/ExerciseDetailScreen';
 import { WorkoutSummaryScreen } from '../screens/WorkoutSummaryScreen';
 import { ProgressOverviewScreen } from '../screens/ProgressOverviewScreen';
+import { SettingsScreen } from '../screens/SettingsScreen';
 
 export const router = createBrowserRouter(
   [
@@ -22,6 +23,7 @@ export const router = createBrowserRouter(
         { path: 'exercise/:exerciseId', element: <ExerciseDetailScreen /> },
         { path: 'workout/:sessionId/summary', element: <WorkoutSummaryScreen /> },
         { path: 'progress', element: <ProgressOverviewScreen /> },
+        { path: 'settings', element: <SettingsScreen /> },
         { path: '*', element: <Navigate to='/' replace /> },
       ],
     },

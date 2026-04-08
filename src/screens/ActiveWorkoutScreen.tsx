@@ -5,6 +5,7 @@ import { WorkoutHeader } from '../components/workout/WorkoutHeader';
 import { RestTimer } from '../components/workout/RestTimer';
 import { ExerciseBlock } from '../components/workout/ExerciseBlock';
 import { PrimaryButton } from '../components/common/PrimaryButton';
+import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { useActiveWorkout } from '../hooks/useActiveWorkout';
 import { getDb } from '../db/database';
 
@@ -13,6 +14,7 @@ export function ActiveWorkoutScreen(): JSX.Element {
   const navigate = useNavigate();
   const activeWorkout = useActiveWorkout(sessionId);
   const [now, setNow] = useState(Date.now());
+  const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const db = getDb();
   const muscles = useLiveQuery(() => db.muscleGroups.toArray(), [], []);
   const setHistory = useLiveQuery(() => db.setEntries.toArray(), [], []);
@@ -42,11 +44,21 @@ export function ActiveWorkoutScreen(): JSX.Element {
 
   return (
     <main className='wb-screen'>
+      <ConfirmDialog
+        open={showFinishConfirm}
+        title='End session?'
+        message='End this session? Your progress is saved.'
+        confirmLabel='End Session'
+        cancelLabel='Keep Going'
+        onConfirm={finish}
+        onCancel={() => setShowFinishConfirm(false)}
+      />
+
       <WorkoutHeader
         title={activeWorkout.session.templateLocalId ? 'Template session' : 'Active session'}
         startedAt={activeWorkout.session.startedAt}
         durationMs={now - new Date(activeWorkout.session.startedAt).getTime()}
-        onFinish={finish}
+        onFinish={() => setShowFinishConfirm(true)}
       />
 
       <RestTimer startedAt={activeWorkout.session.restStartedAt} targetSeconds={activeWorkout.session.restTargetSeconds} />
@@ -72,7 +84,7 @@ export function ActiveWorkoutScreen(): JSX.Element {
               block={block}
               exerciseName={activeWorkout.exerciseNameById[block.exerciseLocalId] ?? 'Exercise'}
               primaryMuscle={muscleMap[(activeWorkout.exercises.find((exercise) => exercise.localId === block.exerciseLocalId)?.primaryMuscleGroupLocalId ?? '')] ?? 'Muscle group'}
-              previousPerformance={lastPerformance ? `${lastPerformance.weightValue ?? 0} ${lastPerformance.weightUnit ?? 'kg'} × ${lastPerformance.reps ?? 0}` : 'No previous data'}
+              previousPerformance={lastPerformance ? `${lastPerformance.weightValue ?? 0} ${lastPerformance.weightUnit ?? 'kg'} x ${lastPerformance.reps ?? 0}` : 'No previous data'}
               sets={exerciseSets}
               recentPrs={recentPrs}
               onQuickAdd={() => activeWorkout.addSet(block.localId, block.exerciseLocalId)}
