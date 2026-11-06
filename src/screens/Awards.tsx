@@ -8,21 +8,30 @@ import { fmt, fmtDate } from '../util';
 
 export function Awards({ state, summary }: { state: AppState; summary: Summary }) {
   const [sel, setSel] = useState<Badge | null>(null);
+  const [filter, setFilter] = useState<'all' | 'have' | 'locked'>('all');
+  const shown = (b: Badge) => filter === 'all' || (filter === 'have') === !!state.badges[b.id];
   const unlocked = BADGES.filter((b) => state.badges[b.id]).length;
   const groups = [...new Set(BADGES.map((b) => b.group))];
 
   return (
-    <div className="screen">
+    <div className="screen stagger">
       <Panel glow>
         <SystemTag>ACHIEVEMENTS</SystemTag>
         <h2 className="h2">{unlocked} / {BADGES.length} unlocked</h2>
         <Bar value={unlocked} max={BADGES.length} />
         <p className="muted small">Unlocked badges become titles you can equip.</p>
+        <div className="seg">
+          {(['all', 'have', 'locked'] as const).map((f) => (
+            <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
+              {f === 'all' ? 'All' : f === 'have' ? 'Unlocked' : 'Locked'}
+            </button>
+          ))}
+        </div>
       </Panel>
-      {groups.map((g) => (
-        <Panel key={g} title={g}>
+      {groups.filter((g) => BADGES.some((b) => b.group === g && shown(b))).map((g) => (
+        <Panel key={g} title={g} right={<span className="muted small mono">{BADGES.filter((b) => b.group === g && state.badges[b.id]).length}/{BADGES.filter((b) => b.group === g).length}</span>}>
           <div className="badge-grid">
-            {BADGES.filter((b) => b.group === g).map((b) => {
+            {BADGES.filter((b) => b.group === g && shown(b)).map((b) => {
               const have = !!state.badges[b.id];
               const secret = b.group === 'Secret' && !have;
               return (

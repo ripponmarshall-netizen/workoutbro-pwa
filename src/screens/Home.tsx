@@ -1,37 +1,61 @@
 import { BADGES, TIER_COLOR, badgeById } from '../engine/badges';
-import { MODE_META } from '../engine/exercises';
+import { MODE_META, MUSCLE_LABEL } from '../engine/exercises';
 import { dailyQuests, dateKey, nextRank, questBonus, type Summary } from '../engine/game';
-import type { AppState, Exercise } from '../engine/types';
-import { actions } from '../store';
-import { Bar, Panel, RankEmblem, SystemTag } from '../components/ui';
-import { fmt } from '../util';
+import { muscleRest } from '../engine/recommend';
+import type { AppState, Exercise, Muscle } from '../engine/types';
+import { actions, toast } from '../store';
+import { Bar, Panel, RankEmblem, SystemTag, useCountUp } from '../components/ui';
+import { buzz, chime, fmt } from '../util';
+
+const RECOVERY_MUSCLES: Muscle[] = ['chest', 'back', 'legs', 'shoulders', 'arms', 'core'];
+
+function greeting(name: string) {
+  const h = new Date().getHours();
+  if (h >= 22 || h < 4) return `Night shift, ${name}. The Gates never close.`;
+  if (h < 12) return `Morning, ${name}. A new day of quests awaits.`;
+  if (h < 17) return `Afternoon, ${name}. Your stats won't raise themselves.`;
+  return `Evening, ${name}. One more Gate before rest?`;
+}
 
 export function Home({ state, summary, exMap, onTrain }: {
   state: AppState; summary: Summary; exMap: Map<string, Exercise>; onTrain: () => void;
 }) {
   const { level, rank } = summary;
   const key = dateKey(Date.now());
-  const quests = dailyQuests(key, level.level, summary.today);
+  const quests = dailyQuests(key, summary.questLevel, summary.today);
   const allDone = quests.every((q) => q.progress >= q.target);
   const claimed = !!state.questClaims[key];
   const nr = nextRank(level.level);
+  const name = state.profile.name || 'Hunter';
   const title = state.profile.title ? badgeById(state.profile.title)?.name : rank.title;
+  const xpInto = useCountUp(level.into, 800);
+  const rest = muscleRest(state.sessions, exMap, Date.now());
 
-  const milestones = BADGES.filter((b) => !state.badges[b.id])
+  const milestones = BADGES.filter((b) => !state.badges[b.id] && b.group !== 'Secret')
     .map((b) => ({ b, pct: Math.min(1, b.metric(summary) / b.target) }))
     .sort((x, y) => y.pct - x.pct)
     .slice(0, 3);
 
   const recentPrs = [...state.sessions].reverse().flatMap((s) => s.prs.map((p) => ({ ...p, at: s.endedAt }))).slice(0, 3);
 
+  const claim = () => {
+    const xp = actions.claimQuests(summary);
+    if (!xp) return;
+    if (state.profile.sound) chime('quest');
+    buzz(80);
+    toast(`Daily quest complete. +${xp} XP`);
+  };
+
   return (
-    <div className="screen">
+    <div className="screen stagger">
+      <p className="greeting muted small">{greeting(name)}</p>
+
       <Panel glow className="hero">
         <div className="hero-row">
-          <RankEmblem rank={rank.id} size={68} />
+          <RankEmblem rank={rank.id} size={68} pulse />
           <div className="hero-id">
             <SystemTag>PLAYER</SystemTag>
-            <h1 className="hero-name">{state.profile.name || 'Hunter'}</h1>
+            <h1 className="hero-name">{name}</h1>
             <div className="hero-title" style={{ color: TIER_COLOR[rank.id] }}>{title}</div>
           </div>
           <div className="hero-level">
@@ -42,20 +66,21 @@ export function Home({ state, summary, exMap, onTrain }: {
         <div className="xp-row">
           <Bar value={level.into} max={level.need} />
           <div className="xp-meta">
-            <span>{fmt(level.into)} / {fmt(level.need)} XP</span>
+            <span>{fmt(xpInto)} / {fmt(level.need)} XP</span>
             {nr && <span className="muted">{nr.id}-Rank at LV {nr.minLevel}</span>}
           </div>
         </div>
       </Panel>
 
-      <Panel title={<><SystemTag>DAILY QUEST</SystemTag></>} right={<span className="muted small">resets midnight</span>}>
+      <Panel title={<SystemTag>DAILY QUEST</SystemTag>} right={<span className="muted small">resets midnight</span>}
+        className={`quest-panel ${allDone && !claimed ? 'claimable' : ''}`}>
         <ul className="quests">
           {quests.map((q) => {
             const done = q.progress >= q.target;
             return (
               <li key={q.kind} className={done ? 'done' : ''}>
                 <div className="quest-top">
-                  <span>{done ? '☑' : '☐'} {q.label}</span>
+                  <span><span className="q-box">{done ? '✓' : ''}</span>{q.label}</span>
                   <span className="mono">{fmt(q.progress)}/{fmt(q.target)} {q.unit}</span>
                 </div>
                 <Bar value={q.progress} max={q.target} thin />
@@ -64,28 +89,47 @@ export function Home({ state, summary, exMap, onTrain }: {
           })}
         </ul>
         {claimed ? (
-          <div className="quest-claimed">✔ Quest reward claimed (+{state.questClaims[key]} XP)</div>
+          <div className="quest-claimed">✔ Reward claimed · +{state.questClaims[key]} XP</div>
         ) : (
-          <button className="btn btn-primary block" disabled={!allDone} onClick={() => actions.claimQuests(summary)}>
-            {allDone ? `Claim reward · +${questBonus(level.level)} XP` : 'Complete all quests to claim'}
+          <button className={`btn block ${allDone ? 'btn-primary shimmer' : 'btn-locked'}`} disabled={!allDone} onClick={claim}>
+            {allDone ? `Claim reward · +${questBonus(summary.questLevel)} XP` : `Reward: +${questBonus(summary.questLevel)} XP`}
           </button>
         )}
       </Panel>
 
+      <button className="btn btn-gate block" onClick={onTrain}>
+        {state.active ? `⚔ Resume ${MODE_META[state.active.mode].gate}` : '⚔ Enter a Gate'}
+      </button>
+
       <div className="grid-2">
-        <Panel title="Streak">
-          <div className="big-stat">🔥 {summary.streak}<small> {summary.streak === 1 ? "day" : "days"}</small></div>
+        <Panel title="Streak" className="mini">
+          <div className={`big-stat ${summary.streak >= 3 ? 'flame' : ''}`}>
+            <span className="flame-icon">🔥</span> {summary.streak}<small> {summary.streak === 1 ? 'day' : 'days'}</small>
+          </div>
           <div className="muted small">Best {summary.longestStreak} · 1 rest day allowed</div>
         </Panel>
-        <Panel title="Weekly Raid">
-          <div className="big-stat">{summary.thisWeekDays}<small> / {state.profile.weeklyGoal}</small></div>
+        <Panel title="Weekly Raid" className="mini">
+          <div className="big-stat">{summary.thisWeekDays}<small> / {state.profile.weeklyGoal} days</small></div>
           <Bar value={summary.thisWeekDays} max={state.profile.weeklyGoal} thin />
         </Panel>
       </div>
 
-      <button className="btn btn-gate block" onClick={onTrain}>
-        {state.active ? `⚔ Resume ${MODE_META[state.active.mode].gate}` : '⚔ Enter a Gate'}
-      </button>
+      <Panel title="Recovery" right={<span className="muted small">since last trained</span>}>
+        <div className="recovery">
+          {RECOVERY_MUSCLES.map((m) => {
+            const h = rest[m];
+            const status = h === Infinity || h >= 48 ? 'ready' : h >= 24 ? 'recovering' : 'fatigued';
+            return (
+              <div key={m} className={`rec rec-${status}`}>
+                <span className="rec-dot" />
+                <span className="rec-name">{MUSCLE_LABEL[m]}</span>
+                <span className="rec-h mono">{h === Infinity ? '—' : h < 24 ? `${Math.floor(h)}h` : `${Math.floor(h / 24)}d`}</span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="muted small rec-legend"><i className="rec-dot r" /> ready 48h+ <i className="rec-dot y" /> 24–48h <i className="rec-dot f" /> &lt;24h</p>
+      </Panel>
 
       {milestones.length > 0 && (
         <Panel title="Next Milestones">

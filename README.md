@@ -14,6 +14,11 @@ Live: https://ripponmarshall-netizen.github.io/workoutbro-pwa/
 - **Daily quests** — 3 per day, scale with level, claim bonus XP when all are done
 - **Streaks** — one rest day between sessions is allowed, so shift work doesn't break it
 - **40 achievements** with progress bars; unlocked ones can be equipped as titles
+- **Recommended raids** — 5-exercise plan per Gate built around your most-rested muscle groups
+- **Progression hints** — "Last 60 kg × 8 → try 62.5 kg × 6" (double progression), one tap to apply
+- **Recovery panel** — hours/days since each muscle group was trained
+- **Training heatmap** and this-week vs last-week XP in the Log
+- Undo for removed sets, exercises and deleted records
 - Offline PWA (add to Home Screen in Safari). Data lives on-device in `localStorage` — use Export backup.
 
 ## Develop
@@ -26,6 +31,6 @@ npm run build   # production build to dist/
 Pushing to `main` deploys to GitHub Pages via `.github/workflows/deploy.yml`.
 
 ## Code map
-- `src/engine/` — pure game logic (XP, levels, PRs, streaks, quests, badges) + exercise library
+- `src/engine/` — pure game logic (XP, levels, PRs, streaks, quests, badges), recommendations + exercise library
 - `src/store.ts` — state, persistence, actions, reward events
 - `src/screens/` — Home, Workout (gate select / active / cleared), Log, Awards, Profile
