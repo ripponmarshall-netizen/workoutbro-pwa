@@ -5,7 +5,7 @@ import {
   computeBests, dailyQuests, dateKey, findPrs, questBonus, sessionXp, summarise,
   type Summary,
 } from './engine/game';
-import type { ActiveWorkout, AppState, Exercise, Mode, Profile, Session, SetEntry } from './engine/types';
+import type { ActiveWorkout, AppState, Exercise, Mode, Profile, Session, SetEntry, WorkoutExercise } from './engine/types';
 
 const KEY = 'workoutbro.hunter.v1';
 
@@ -38,31 +38,62 @@ function load(): AppState {
   }
 }
 
-let state: AppState = load();
-const listeners = new Set<() => void>();
+/* ------------------------------------------------------------------ */
+/* Tiny external stores                                                */
+/* ------------------------------------------------------------------ */
 
-function save() {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  } catch {
-    /* storage full / private mode — keep running in memory */
-  }
+function createSignal<T>(initial: T) {
+  let value = initial;
+  const subs = new Set<() => void>();
+  return {
+    get: () => value,
+    set(next: T) { value = next; subs.forEach((l) => l()); },
+    subscribe(l: () => void) { subs.add(l); return () => { subs.delete(l); }; },
+  };
 }
 
+const app = createSignal<AppState>(load());
+let saveWarned = false;
+
 function set(next: AppState) {
-  state = next;
-  save();
-  listeners.forEach((l) => l());
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next));
+    saveWarned = false;
+  } catch {
+    if (!saveWarned) {
+      saveWarned = true;
+      toast('Could not save to this device (storage full or private mode). Export a backup now.', undefined, 8000);
+    }
+  }
+  app.set(next);
 }
 
 export function useStore(): AppState {
-  return useSyncExternalStore(
-    (l) => { listeners.add(l); return () => listeners.delete(l); },
-    () => state,
-  );
+  return useSyncExternalStore(app.subscribe, app.get);
 }
 
-export const getState = () => state;
+export const getState = app.get;
+
+/* ------------------------------------------------------------------ */
+/* Toasts (system notices with optional Undo)                          */
+/* ------------------------------------------------------------------ */
+
+export interface Toast { id: string; text: string; action?: { label: string; run: () => void }; ttl: number }
+const toasts = createSignal<Toast[]>([]);
+
+export function toast(text: string, action?: Toast['action'], ttl = 4000) {
+  const t: Toast = { id: uid(), text, action, ttl };
+  toasts.set([...toasts.get().slice(-2), t]);
+  setTimeout(() => dismissToast(t.id), ttl);
+}
+
+export function dismissToast(id: string) {
+  toasts.set(toasts.get().filter((t) => t.id !== id));
+}
+
+export function useToasts() {
+  return useSyncExternalStore(toasts.subscribe, toasts.get);
+}
 
 /* ------------------------------------------------------------------ */
 /* Reward events (level-ups, badges, rank-ups) for the overlay          */
@@ -73,32 +104,22 @@ export type Reward =
   | { kind: 'rank'; rank: string; title: string }
   | { kind: 'badge'; badge: Badge };
 
-let rewards: Reward[] = [];
-const rewardListeners = new Set<() => void>();
-
-function pushRewards(r: Reward[]) {
-  if (!r.length) return;
-  rewards = [...rewards, ...r];
-  rewardListeners.forEach((l) => l());
-}
+const rewards = createSignal<Reward[]>([]);
 
 export function useRewards(): [Reward | undefined, () => void] {
-  const queue = useSyncExternalStore(
-    (l) => { rewardListeners.add(l); return () => rewardListeners.delete(l); },
-    () => rewards,
-  );
-  return [queue[0], () => { rewards = rewards.slice(1); rewardListeners.forEach((l) => l()); }];
+  const queue = useSyncExternalStore(rewards.subscribe, rewards.get);
+  return [queue[0], () => rewards.set(rewards.get().slice(1))];
 }
 
 /** Apply a state change, then detect level/rank-ups and new badges. */
 function commit(next: AppState): Reward[] {
-  const map = exerciseMap(next.customExercises);
+  const state = app.get();
   const before = summarise(state, exerciseMap(state.customExercises));
-  const after = summarise(next, map);
+  const after = summarise(next, exerciseMap(next.customExercises));
   const out: Reward[] = [];
-  if (after.level.level > before.level.level) out.push({ kind: 'level', level: after.level.level });
-  if (after.rank.id !== before.rank.id && after.level.level > before.level.level) {
-    out.push({ kind: 'rank', rank: after.rank.id, title: after.rank.title });
+  if (after.level.level > before.level.level) {
+    out.push({ kind: 'level', level: after.level.level });
+    if (after.rank.id !== before.rank.id) out.push({ kind: 'rank', rank: after.rank.id, title: after.rank.title });
   }
   const unlocked = newlyUnlocked(after, next.badges);
   if (unlocked.length) {
@@ -107,7 +128,7 @@ function commit(next: AppState): Reward[] {
     unlocked.forEach((badge) => out.push({ kind: 'badge', badge }));
   }
   set(next);
-  pushRewards(out);
+  if (out.length) rewards.set([...rewards.get(), ...out]);
   return out;
 }
 
@@ -116,33 +137,61 @@ function commit(next: AppState): Reward[] {
 /* ------------------------------------------------------------------ */
 
 function patchActive(fn: (a: ActiveWorkout) => ActiveWorkout) {
+  const state = app.get();
   if (!state.active) return;
   set({ ...state, active: fn(state.active) });
 }
 
+function firstSet(exerciseId: string, state: AppState): WorkoutExercise | null {
+  const ex = exerciseMap(state.customExercises).get(exerciseId);
+  if (!ex) return null;
+  // Pre-fill from the last time this exercise was done
+  const last = [...state.sessions].reverse().find((s) => s.exercises.some((e) => e.exerciseId === exerciseId));
+  const lastSet = last?.exercises.find((e) => e.exerciseId === exerciseId)?.sets.slice(-1)[0];
+  const set: SetEntry = {
+    id: uid(), done: false,
+    weight: ex.track === 'weight' ? lastSet?.weight ?? 0 : undefined,
+    reps: ex.track !== 'time' ? lastSet?.reps ?? 10 : undefined,
+    seconds: ex.track === 'time' ? lastSet?.seconds ?? 30 : undefined,
+  };
+  return { exerciseId, sets: [set] };
+}
+
 export const actions = {
-  startWorkout(mode: Mode) {
+  startWorkout(mode: Mode, exerciseIds: string[] = []) {
+    const state = app.get();
     if (state.active) return;
-    set({ ...state, active: { id: uid(), mode, startedAt: Date.now(), exercises: [] } });
+    const exercises = exerciseIds.map((id) => firstSet(id, state)).filter((x): x is WorkoutExercise => !!x);
+    set({ ...state, active: { id: uid(), mode, startedAt: Date.now(), exercises } });
   },
 
   addExercise(exerciseId: string) {
-    const ex = exerciseMap(state.customExercises).get(exerciseId);
-    if (!ex) return;
-    // Pre-fill from the last time this exercise was done
-    const last = [...state.sessions].reverse().find((s) => s.exercises.some((e) => e.exerciseId === exerciseId));
-    const lastSet = last?.exercises.find((e) => e.exerciseId === exerciseId)?.sets.slice(-1)[0];
-    const first: SetEntry = {
-      id: uid(), done: false,
-      weight: ex.track === 'weight' ? lastSet?.weight ?? 0 : undefined,
-      reps: ex.track !== 'time' ? lastSet?.reps ?? 10 : undefined,
-      seconds: ex.track === 'time' ? lastSet?.seconds ?? 30 : undefined,
-    };
-    patchActive((a) => ({ ...a, exercises: [...a.exercises, { exerciseId, sets: [first] }] }));
+    const we = firstSet(exerciseId, app.get());
+    if (we) patchActive((a) => ({ ...a, exercises: [...a.exercises, we] }));
   },
 
   removeExercise(index: number) {
+    const removed = app.get().active?.exercises[index];
+    if (!removed) return;
     patchActive((a) => ({ ...a, exercises: a.exercises.filter((_, i) => i !== index) }));
+    toast('Exercise removed', {
+      label: 'Undo',
+      run: () => patchActive((a) => {
+        const exercises = [...a.exercises];
+        exercises.splice(Math.min(index, exercises.length), 0, removed);
+        return { ...a, exercises };
+      }),
+    });
+  },
+
+  moveExercise(index: number, dir: -1 | 1) {
+    patchActive((a) => {
+      const j = index + dir;
+      if (j < 0 || j >= a.exercises.length) return a;
+      const exercises = [...a.exercises];
+      [exercises[index], exercises[j]] = [exercises[j], exercises[index]];
+      return { ...a, exercises };
+    });
   },
 
   addSet(exIndex: number) {
@@ -165,21 +214,51 @@ export const actions = {
     }));
   },
 
+  /** Apply values to every unticked set of an exercise (used by progression hints). */
+  applyToOpenSets(exIndex: number, patch: Partial<SetEntry>) {
+    patchActive((a) => ({
+      ...a,
+      exercises: a.exercises.map((we, i) =>
+        i !== exIndex ? we : { ...we, sets: we.sets.map((s) => (s.done ? s : { ...s, ...patch })) },
+      ),
+    }));
+  },
+
   removeSet(exIndex: number, setIndex: number) {
+    const removed = app.get().active?.exercises[exIndex]?.sets[setIndex];
+    if (!removed) return;
     patchActive((a) => ({
       ...a,
       exercises: a.exercises.map((we, i) =>
         i !== exIndex ? we : { ...we, sets: we.sets.filter((_, j) => j !== setIndex) },
       ),
     }));
+    toast(`Set ${setIndex + 1} removed`, {
+      label: 'Undo',
+      run: () => patchActive((a) => ({
+        ...a,
+        exercises: a.exercises.map((we, i) => {
+          if (i !== exIndex) return we;
+          const sets = [...we.sets];
+          sets.splice(Math.min(setIndex, sets.length), 0, removed);
+          return { ...we, sets };
+        }),
+      })),
+    });
+  },
+
+  setRest(endsAt: number | null) {
+    patchActive((a) => ({ ...a, restEnd: endsAt ?? undefined }));
   },
 
   discardWorkout() {
+    const state = app.get();
     set({ ...state, active: null });
   },
 
   /** Returns the saved session, or null if nothing valid was logged. */
   finishWorkout(): { session: Session; rewards: Reward[] } | null {
+    const state = app.get();
     const a = state.active;
     if (!a) return null;
     const map = exerciseMap(state.customExercises);
@@ -198,31 +277,47 @@ export const actions = {
 
   deleteSession(id: string) {
     // Badges already earned are kept — they're a permanent record.
+    const state = app.get();
+    const idx = state.sessions.findIndex((s) => s.id === id);
+    if (idx < 0) return;
+    const removed = state.sessions[idx];
     set({ ...state, sessions: state.sessions.filter((s) => s.id !== id) });
+    toast('Record deleted', {
+      label: 'Undo',
+      run: () => {
+        const cur = app.get();
+        const sessions = [...cur.sessions];
+        sessions.splice(Math.min(idx, sessions.length), 0, removed);
+        set({ ...cur, sessions });
+      },
+    }, 6000);
   },
 
   claimQuests(summary: Summary): number {
+    const state = app.get();
     const key = dateKey(Date.now());
     if (state.questClaims[key]) return 0;
-    const quests = dailyQuests(key, summary.level.level, summary.today);
+    const quests = dailyQuests(key, summary.questLevel, summary.today);
     if (!quests.every((q) => q.progress >= q.target)) return 0;
-    const bonus = questBonus(summary.level.level);
+    const bonus = questBonus(summary.questLevel);
     commit({ ...state, questClaims: { ...state.questClaims, [key]: bonus } });
     return bonus;
   },
 
   updateProfile(patch: Partial<Profile>) {
+    const state = app.get();
     commit({ ...state, profile: { ...state.profile, ...patch } });
   },
 
   addCustomExercise(ex: Omit<Exercise, 'id' | 'custom'>): string {
+    const state = app.get();
     const id = 'custom-' + uid();
     set({ ...state, customExercises: [...state.customExercises, { ...ex, id, custom: true }] });
     return id;
   },
 
   exportData(): string {
-    return JSON.stringify(state, null, 2);
+    return JSON.stringify(app.get(), null, 2);
   },
 
   importData(json: string) {
@@ -235,5 +330,3 @@ export const actions = {
     set(fresh());
   },
 };
-
-

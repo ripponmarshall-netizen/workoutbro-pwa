@@ -2,9 +2,9 @@ import { useRef, useState } from 'react';
 import { TIER_COLOR } from '../engine/badges';
 import { computeBests, type Summary } from '../engine/game';
 import type { AppState, Exercise } from '../engine/types';
-import { actions } from '../store';
+import { actions, toast } from '../store';
 import { Panel, RankEmblem, Sheet, SystemTag } from '../components/ui';
-import { fmt, fmtVolume, toUnit } from '../util';
+import { fmt, fmtDate, fmtVolume, toUnit } from '../util';
 
 const STAT_INFO: Record<keyof Summary['stats'], { label: string; hint: string }> = {
   str: { label: 'STR', hint: 'Strength — weighted lifts & pulls' },
@@ -23,6 +23,7 @@ export function Profile({ state, summary, exMap }: { state: AppState; summary: S
     .map(([id, b]) => ({ ex: exMap.get(id), b }))
     .filter((x) => x.ex && (x.b.e1rm || x.b.reps || x.b.time))
     .sort((x, y) => x.ex!.name.localeCompare(y.ex!.name));
+  const backupStale = state.sessions.length >= 3 && (!p.lastBackup || Date.now() - p.lastBackup > 14 * 86_400_000);
   const maxStat = Math.max(...Object.values(summary.stats), 20);
 
   const exportFile = () => {
@@ -32,6 +33,8 @@ export function Profile({ state, summary, exMap }: { state: AppState; summary: S
     a.download = `workoutbro-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    actions.updateProfile({ lastBackup: Date.now() });
+    toast('Backup exported. Save it to Files or iCloud Drive.');
   };
 
   const importFile = async (f: File | undefined) => {
@@ -45,7 +48,7 @@ export function Profile({ state, summary, exMap }: { state: AppState; summary: S
   };
 
   return (
-    <div className="screen">
+    <div className="screen stagger">
       <Panel glow>
         <SystemTag>STATUS</SystemTag>
         <div className="status-head">
@@ -119,7 +122,10 @@ export function Profile({ state, summary, exMap }: { state: AppState; summary: S
       </Panel>
 
       <Panel title="Data">
-        <p className="muted small">Everything is stored on this device only. Export a backup regularly.</p>
+        <p className="muted small">
+          Everything is stored on this device only. Last backup:{' '}
+          <strong className={backupStale ? 'warn-text' : ''}>{p.lastBackup ? fmtDate(p.lastBackup) : 'never'}</strong>
+        </p>
         <div className="row gap wrap">
           <button className="btn btn-outline" onClick={exportFile}>Export backup</button>
           <button className="btn btn-outline" onClick={() => fileRef.current?.click()}>Import backup</button>

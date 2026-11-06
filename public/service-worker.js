@@ -1,7 +1,10 @@
-/* WorkoutBro service worker — network-first pages, cache-first assets.
-   Bump CACHE when you need to force-clear old caches. */
-const CACHE = 'workoutbro-hunter-v1';
+/* WorkoutBro service worker.
+   Pages: network-first with a 3 s timeout (weak gym signal falls back to cache).
+   Assets & fonts: cache-first (Vite asset names are content-hashed).
+   Bump CACHE to force-clear old caches. */
+const CACHE = 'workoutbro-hunter-v2';
 const SHELL = ['./', './manifest.webmanifest', './icon.svg', './icon-192.png'];
+const NAV_TIMEOUT_MS = 3000;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => undefined));
@@ -16,21 +19,27 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function networkFirstPage(req) {
+  const network = fetch(req).then((res) => {
+    if (res.ok) {
+      const copy = res.clone();
+      caches.open(CACHE).then((c) => c.put('./', copy));
+    }
+    return res;
+  });
+  const timeout = new Promise((resolve) => {
+    setTimeout(() => caches.match('./').then((hit) => hit && resolve(hit)), NAV_TIMEOUT_MS);
+  });
+  return Promise.race([network.catch(() => caches.match('./')), timeout]);
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
   if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./', copy));
-          return res;
-        })
-        .catch(() => caches.match('./')),
-    );
+    event.respondWith(networkFirstPage(req));
     return;
   }
 

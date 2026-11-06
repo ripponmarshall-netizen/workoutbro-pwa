@@ -1,9 +1,18 @@
-import type { Profile } from './engine/types';
+import type { Profile, Track } from './engine/types';
 
 const LB = 2.20462;
 
 export const toUnit = (kg: number | undefined, unit: Profile['unit']) =>
   kg == null ? '' : String(Math.round((unit === 'lb' ? kg * LB : kg) * 10) / 10);
+
+export const inUnit = (kg: number, unit: Profile['unit']) => Math.round((unit === 'lb' ? kg * LB : kg) * 10) / 10;
+
+/** "60 kg × 8", "25 reps", "45s" */
+export function fmtSet(s: { weight?: number; reps?: number; seconds?: number }, track: Track, unit: Profile['unit']) {
+  if (track === 'time') return `${s.seconds ?? 0}s`;
+  if (track === 'reps') return `${s.reps ?? 0} reps`;
+  return `${inUnit(s.weight ?? 0, unit)} ${unit} × ${s.reps ?? 0}`;
+}
 
 export const fromUnit = (v: number, unit: Profile['unit']) => (unit === 'lb' ? v / LB : v);
 
@@ -33,14 +42,19 @@ export function fmtTime(ts: number) {
 
 /* Tiny synthesised chime — no audio files needed. iOS only plays after a user tap. */
 let ctx: AudioContext | null = null;
-export function chime(kind: 'level' | 'badge' | 'rest' | 'tap' = 'tap') {
+export type ChimeKind = 'level' | 'badge' | 'rest' | 'tap' | 'gate' | 'clear' | 'quest';
+export function chime(kind: ChimeKind = 'tap') {
   try {
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AC) return;
     ctx = ctx ?? new AC();
     if (ctx.state === 'suspended') void ctx.resume();
-    const notes = { level: [523, 659, 784, 1047], badge: [659, 988], rest: [880, 880], tap: [740] }[kind];
+    const notes = {
+      level: [523, 659, 784, 1047], badge: [659, 988], rest: [880, 0, 880], tap: [740],
+      gate: [196, 294, 392], clear: [392, 523, 659, 784], quest: [784, 988, 1175],
+    }[kind];
     notes.forEach((freq, i) => {
+      if (!freq) return;
       const osc = ctx!.createOscillator();
       const gain = ctx!.createGain();
       const t = ctx!.currentTime + i * 0.11;

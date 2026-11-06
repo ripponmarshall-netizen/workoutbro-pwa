@@ -34,6 +34,8 @@ export interface ActiveWorkout {
   mode: Mode;
   startedAt: number;
   exercises: WorkoutExercise[];
+  /** Rest timer end (epoch ms) — kept here so it survives tab switches and reloads */
+  restEnd?: number;
 }
 
 export interface PrHit {
@@ -59,6 +61,8 @@ export interface Profile {
   weeklyGoal: number;
   /** Badge id whose title is equipped */
   title: string | null;
+  /** When a backup was last exported (epoch ms) */
+  lastBackup?: number;
 }
 
 export interface AppState {

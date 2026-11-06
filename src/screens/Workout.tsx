@@ -1,35 +1,73 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { MODE_META, MUSCLE_LABEL, allExercises } from '../engine/exercises';
-import { setXp, sessionTotals, type Summary } from '../engine/game';
+import { COMPLETION_XP, PR_XP, setXp, sessionTotals, type Summary } from '../engine/game';
+import { progression, recommendPlan } from '../engine/recommend';
 import type { AppState, Exercise, Mode, Muscle, Session, SetEntry, Track, TrainStat } from '../engine/types';
 import { actions } from '../store';
-import { Panel, Sheet, SystemTag } from '../components/ui';
-import { buzz, chime, fmt, fmtClock, fmtVolume, fromUnit, toUnit } from '../util';
+import { NumInput, Panel, Sheet, SystemTag, useCountUp } from '../components/ui';
+import { buzz, chime, fmt, fmtClock, fmtSet, fmtVolume, fromUnit, inUnit, toUnit } from '../util';
 
 /* ------------------------------------------------------------------ */
 /* Gate selection                                                      */
 /* ------------------------------------------------------------------ */
 
-export function GateSelect({ summary }: { summary: Summary }) {
+export function GateSelect({ state, summary, exMap }: { state: AppState; summary: Summary; exMap: Map<string, Exercise> }) {
+  const [mode, setMode] = useState<Mode>(() => lastMode(state) ?? 'gym');
+  const plan = useMemo(
+    () => recommendPlan(mode, state.sessions, allExercises(state.customExercises), exMap, Date.now()),
+    [mode, state.sessions, state.customExercises, exMap],
+  );
+
+  const start = (ids: string[] = []) => {
+    if (state.profile.sound) chime('gate');
+    buzz(40);
+    actions.startWorkout(mode, ids);
+  };
+
   return (
-    <div className="screen">
+    <div className="screen stagger">
       <Panel glow>
         <SystemTag>GATE DETECTED</SystemTag>
         <h2 className="h2">Choose your Gate</h2>
-        <p className="muted">Every completed set grants XP. Beat a previous best for a Limit Break bonus.</p>
+        <p className="muted small">Every completed set grants XP. Beat a previous best for a Limit Break bonus.</p>
       </Panel>
-      {(Object.keys(MODE_META) as Mode[]).map((m) => (
-        <button key={m} className={`gate-card gate-${m}`} onClick={() => { chime('tap'); actions.startWorkout(m); }}>
-          <span className="gate-icon">{MODE_META[m].icon}</span>
-          <span className="gate-text">
-            <strong>{MODE_META[m].gate}</strong>
-            <span className="muted small">{MODE_META[m].label} · {MODE_META[m].blurb}</span>
-          </span>
-          <span className="gate-count mono">{summary.byMode[m]} cleared</span>
-        </button>
-      ))}
+
+      <div className="gate-list">
+        {(Object.keys(MODE_META) as Mode[]).map((m) => (
+          <button key={m} className={`gate-card gate-${m} ${mode === m ? 'on' : ''}`} onClick={() => { setMode(m); buzz(10); }}>
+            <span className="gate-portal"><span>{MODE_META[m].icon}</span></span>
+            <span className="gate-text">
+              <strong>{MODE_META[m].gate}</strong>
+              <span className="muted small">{MODE_META[m].label} · {MODE_META[m].blurb}</span>
+            </span>
+            <span className="gate-count mono">{summary.byMode[m]}</span>
+          </button>
+        ))}
+      </div>
+
+      <Panel title={<SystemTag>RECOMMENDED RAID</SystemTag>} right={<span className="muted small">{plan.focus.map((f) => MUSCLE_LABEL[f]).join(' · ')}</span>} className="plan">
+        <p className="muted small plan-reason">{plan.reason}</p>
+        <ol className="plan-list">
+          {plan.exerciseIds.map((id) => {
+            const ex = exMap.get(id)!;
+            const p = progression(id, state.sessions, exMap);
+            return (
+              <li key={id}>
+                <span>{ex.name}</span>
+                <span className="muted small mono">{p ? fmtSet(p.next, ex.track, state.profile.unit) : MUSCLE_LABEL[ex.muscle]}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <button className="btn btn-gate block" onClick={() => start(plan.exerciseIds)}>⚔ Accept raid</button>
+        <button className="btn btn-ghost block small" onClick={() => start()}>Enter empty {MODE_META[mode].gate}</button>
+      </Panel>
     </div>
   );
+}
+
+function lastMode(state: AppState): Mode | undefined {
+  return state.sessions[state.sessions.length - 1]?.mode;
 }
 
 /* ------------------------------------------------------------------ */
@@ -40,7 +78,9 @@ function useNow(ms = 1000) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(t);
+    const vis = () => setNow(Date.now());
+    document.addEventListener('visibilitychange', vis);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', vis); };
   }, [ms]);
   return now;
 }
@@ -52,39 +92,62 @@ export function ActiveWorkout({ state, exMap, onFinished }: {
   const unit = state.profile.unit;
   const now = useNow();
   const [picker, setPicker] = useState(false);
-  const [restEnd, setRestEnd] = useState<number | null>(null);
   const [confirmQuit, setConfirmQuit] = useState(false);
-  const [warn, setWarn] = useState('');
+  const [confirmFinish, setConfirmFinish] = useState(false);
+  const [floats, setFloats] = useState<{ id: number; xp: number; key: string }[]>([]);
 
   const liveXp = a.exercises.reduce(
     (sum, we) => sum + we.sets.reduce((s, set) => s + setXp(set, exMap.get(we.exerciseId)), 0), 0,
   );
   const doneSets = a.exercises.reduce((n, we) => n + we.sets.filter((s) => s.done).length, 0);
+  const openSets = a.exercises.reduce((n, we) => n + we.sets.filter((s) => !s.done).length, 0);
+  const shownXp = useCountUp(liveXp, 400);
 
-  const restLeft = restEnd ? Math.ceil((restEnd - now) / 1000) : 0;
+  const restLeft = a.restEnd ? Math.ceil((a.restEnd - now) / 1000) : 0;
   useEffect(() => {
-    if (restEnd && restLeft <= 0) {
-      setRestEnd(null);
+    if (a.restEnd && restLeft <= 0) {
+      actions.setRest(null);
       if (state.profile.sound) chime('rest');
       buzz(200);
     }
-  }, [restEnd, restLeft, state.profile.sound]);
+  }, [a.restEnd, restLeft, state.profile.sound]);
 
-  const toggleDone = (ei: number, si: number, done: boolean) => {
-    actions.updateSet(ei, si, { done: !done });
-    if (!done) {
+  const toggleDone = (ei: number, si: number, set: SetEntry) => {
+    const ex = exMap.get(a.exercises[ei].exerciseId);
+    actions.updateSet(ei, si, { done: !set.done });
+    if (!set.done) {
       buzz();
       if (state.profile.sound) chime('tap');
-      setRestEnd(Date.now() + (a.mode === 'bodyweight' ? 60 : 90) * 1000);
+      actions.setRest(Date.now() + (a.mode === 'bodyweight' ? 60 : 90) * 1000);
+      const xp = setXp({ ...set, done: true }, ex);
+      if (xp > 0) {
+        const f = { id: Date.now(), xp, key: `${ei}-${si}` };
+        setFloats((l) => [...l, f]);
+        setTimeout(() => setFloats((l) => l.filter((x) => x.id !== f.id)), 1100);
+      }
     }
   };
 
-  const finish = () => {
+  const finish = (tickAll = false) => {
+    if (tickAll) {
+      a.exercises.forEach((we, ei) => we.sets.forEach((s, si) => {
+        if (!s.done && setXp({ ...s, done: true }, exMap.get(we.exerciseId)) > 0) actions.updateSet(ei, si, { done: true });
+      }));
+    }
+    setConfirmFinish(false);
     const res = actions.finishWorkout();
-    if (!res) { setWarn('Tick at least one completed set before clearing the Gate.'); return; }
-    if (state.profile.sound) chime('level');
+    if (!res) return;
+    if (state.profile.sound) chime('clear');
     onFinished(res.session);
   };
+
+  const onFinishTap = () => {
+    if (doneSets === 0 && openSets === 0) return;
+    if (openSets > 0) setConfirmFinish(true);
+    else finish();
+  };
+
+  const restTotal = a.mode === 'bodyweight' ? 60 : 90;
 
   return (
     <div className="screen workout">
@@ -94,13 +157,14 @@ export function ActiveWorkout({ state, exMap, onFinished }: {
           <div className="wk-clock mono">{fmtClock((now - a.startedAt) / 1000)}</div>
         </div>
         <div className="wk-xp">
-          <span className="mono">+{fmt(liveXp)}</span>
+          <span className="mono">+{fmt(shownXp)}</span>
           <span className="muted small">XP · {doneSets} sets</span>
         </div>
       </div>
 
       {a.exercises.length === 0 && (
-        <Panel>
+        <Panel className="empty-gate">
+          <div className="empty-portal" />
           <p className="muted center">The Gate is open. Add your first exercise to begin.</p>
         </Panel>
       )}
@@ -108,10 +172,25 @@ export function ActiveWorkout({ state, exMap, onFinished }: {
       {a.exercises.map((we, ei) => {
         const ex = exMap.get(we.exerciseId);
         if (!ex) return null;
+        const prog = progression(ex.id, state.sessions, exMap);
+        const allDone = we.sets.length > 0 && we.sets.every((s) => s.done);
         return (
-          <Panel key={ei} title={ex.name} right={
-            <button className="icon-btn" aria-label="Remove exercise" onClick={() => actions.removeExercise(ei)}>✕</button>
+          <Panel key={`${we.exerciseId}-${ei}`} className={`ex-panel ${allDone ? 'ex-done' : ''}`} title={ex.name} right={
+            <span className="ex-actions">
+              <button className="icon-btn" aria-label="Move up" disabled={ei === 0} onClick={() => actions.moveExercise(ei, -1)}>↑</button>
+              <button className="icon-btn" aria-label="Move down" disabled={ei === a.exercises.length - 1} onClick={() => actions.moveExercise(ei, 1)}>↓</button>
+              <button className="icon-btn" aria-label="Remove exercise" onClick={() => actions.removeExercise(ei)}>✕</button>
+            </span>
           }>
+            {prog && (
+              <button className="hint" onClick={() => { actions.applyToOpenSets(ei, prog.next); buzz(10); }}>
+                <span className="hint-tag">SYSTEM</span>
+                <span className="hint-body">
+                  Last {fmtSet(prog.last, ex.track, unit)} → <strong>try {fmtSet(prog.next, ex.track, unit)}</strong>
+                </span>
+                <span className="hint-apply">Apply</span>
+              </button>
+            )}
             <div className={`set-grid track-${ex.track}`}>
               <span className="set-h">SET</span>
               {ex.track === 'weight' && <span className="set-h">{unit.toUpperCase()}</span>}
@@ -120,8 +199,9 @@ export function ActiveWorkout({ state, exMap, onFinished }: {
               <span className="set-h">✓</span>
               {we.sets.map((s, si) => (
                 <SetRow key={s.id} index={si} track={ex.track} unit={unit} set={s}
+                  float={floats.find((f) => f.key === `${ei}-${si}`)?.xp}
                   onChange={(p) => actions.updateSet(ei, si, p)}
-                  onToggle={() => toggleDone(ei, si, s.done)}
+                  onToggle={() => toggleDone(ei, si, s)}
                   onRemove={() => actions.removeSet(ei, si)} />
               ))}
             </div>
@@ -131,22 +211,35 @@ export function ActiveWorkout({ state, exMap, onFinished }: {
       })}
 
       <button className="btn btn-outline block" onClick={() => setPicker(true)}>+ Add exercise</button>
-      {warn && <p className="warn">{warn}</p>}
-      <button className="btn btn-gate block" onClick={finish}>Clear the Gate</button>
+      <button className="btn btn-gate block" disabled={doneSets === 0 && openSets === 0} onClick={onFinishTap}>
+        Clear the Gate{liveXp > 0 ? ` · +${fmt(liveXp + COMPLETION_XP)} XP` : ''}
+      </button>
       <button className="btn btn-ghost block danger" onClick={() => setConfirmQuit(true)}>Abandon Gate</button>
 
-      {restEnd && (
-        <div className="rest-bar">
+      {a.restEnd && restLeft > 0 && (
+        <div className="rest-bar" style={{ '--p': `${Math.max(0, Math.min(1, restLeft / restTotal)) * 100}%` } as CSSProperties}>
+          <span className="rest-ring" />
           <span className="muted small">REST</span>
           <span className="mono rest-time">{fmtClock(restLeft)}</span>
-          <button className="btn btn-ghost small" onClick={() => setRestEnd(restEnd - 15_000)}>−15</button>
-          <button className="btn btn-ghost small" onClick={() => setRestEnd(restEnd + 15_000)}>+15</button>
-          <button className="btn btn-primary small" onClick={() => setRestEnd(null)}>Skip</button>
+          <button className="btn btn-ghost small" onClick={() => actions.setRest(a.restEnd! - 15_000)}>−15</button>
+          <button className="btn btn-ghost small" onClick={() => actions.setRest(a.restEnd! + 15_000)}>+15</button>
+          <button className="btn btn-primary small" onClick={() => actions.setRest(null)}>Skip</button>
         </div>
       )}
 
       <ExercisePicker open={picker} mode={a.mode} state={state} onClose={() => setPicker(false)}
         onPick={(id) => { actions.addExercise(id); setPicker(false); }} />
+
+      <Sheet open={confirmFinish} onClose={() => setConfirmFinish(false)} title="Unticked sets">
+        <p className="muted">
+          {openSets} set{openSets === 1 ? ' is' : 's are'} not ticked. Unticked sets don't count toward XP or records.
+        </p>
+        <button className="btn btn-primary block" onClick={() => finish(true)}>Tick all & clear</button>
+        <button className="btn btn-outline block" disabled={doneSets === 0} onClick={() => finish(false)}>
+          Clear with ticked sets only
+        </button>
+        <button className="btn btn-ghost block" onClick={() => setConfirmFinish(false)}>Keep training</button>
+      </Sheet>
 
       <Sheet open={confirmQuit} onClose={() => setConfirmQuit(false)} title="Abandon Gate?">
         <p className="muted">All sets in this workout will be lost and no XP is awarded.</p>
@@ -158,34 +251,38 @@ export function ActiveWorkout({ state, exMap, onFinished }: {
   );
 }
 
-function SetRow({ index, track, unit, set, onChange, onToggle, onRemove }: {
-  index: number; track: Track; unit: 'kg' | 'lb';
-  set: SetEntry;
-  onChange: (p: { weight?: number; reps?: number; seconds?: number }) => void;
-  onToggle: () => void; onRemove: () => void;
+function SetRow({ index, track, unit, set, float, onChange, onToggle, onRemove }: {
+  index: number; track: Track; unit: 'kg' | 'lb'; set: SetEntry; float?: number;
+  onChange: (p: Partial<SetEntry>) => void; onToggle: () => void; onRemove: () => void;
 }) {
-  const num = (v: string) => (v === '' ? 0 : Math.max(0, Number(v)));
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 2500);
+    return () => clearTimeout(t);
+  }, [armed]);
+
   return (
     <>
-      <button className="set-idx mono" onClick={onRemove} aria-label={`Remove set ${index + 1}`} title="Tap to remove">
-        {index + 1}
+      <button className={`set-idx mono ${armed ? 'armed' : ''} ${set.done ? 'done' : ''}`}
+        onClick={() => (armed ? onRemove() : setArmed(true))}
+        aria-label={armed ? `Confirm remove set ${index + 1}` : `Set ${index + 1}, tap twice to remove`}>
+        {armed ? '✕' : index + 1}
       </button>
       {track === 'weight' && (
-        <input className="set-in" type="number" inputMode="decimal" min={0} step="0.5"
-          value={toUnit(set.weight, unit)} onFocus={(e) => e.target.select()}
-          onChange={(e) => onChange({ weight: fromUnit(num(e.target.value), unit) })} />
+        <NumInput decimal label={`Set ${index + 1} weight`} value={set.weight == null ? undefined : inUnit(set.weight, unit)}
+          onChange={(n) => onChange({ weight: fromUnit(n, unit) })} />
       )}
       {track !== 'time' && (
-        <input className="set-in" type="number" inputMode="numeric" min={0}
-          value={set.reps ?? ''} onFocus={(e) => e.target.select()}
-          onChange={(e) => onChange({ reps: Math.round(num(e.target.value)) })} />
+        <NumInput label={`Set ${index + 1} reps`} value={set.reps} onChange={(n) => onChange({ reps: Math.round(n) })} />
       )}
       {track === 'time' && (
-        <input className="set-in" type="number" inputMode="numeric" min={0}
-          value={set.seconds ?? ''} onFocus={(e) => e.target.select()}
-          onChange={(e) => onChange({ seconds: Math.round(num(e.target.value)) })} />
+        <NumInput label={`Set ${index + 1} seconds`} value={set.seconds} onChange={(n) => onChange({ seconds: Math.round(n) })} />
       )}
-      <button className={`set-check ${set.done ? 'on' : ''}`} onClick={onToggle} aria-label="Complete set">✓</button>
+      <button className={`set-check ${set.done ? 'on' : ''}`} onClick={onToggle} aria-label="Complete set" aria-pressed={set.done}>
+        ✓
+        {float != null && <span className="xp-float mono">+{float}</span>}
+      </button>
     </>
   );
 }
@@ -202,6 +299,17 @@ function ExercisePicker({ open, mode, state, onClose, onPick }: {
   const [all, setAll] = useState(false);
   const [creating, setCreating] = useState(false);
 
+  useEffect(() => { if (open) { setQ(''); setCreating(false); } }, [open]);
+
+  const inWorkout = useMemo(() => new Set(state.active?.exercises.map((e) => e.exerciseId)), [state.active]);
+  const recentIds = useMemo(() => {
+    const seen: string[] = [];
+    for (let i = state.sessions.length - 1; i >= 0 && seen.length < 6; i--) {
+      for (const we of state.sessions[i].exercises) if (!seen.includes(we.exerciseId)) seen.push(we.exerciseId);
+    }
+    return seen;
+  }, [state.sessions]);
+
   const list = useMemo(() => {
     const term = q.trim().toLowerCase();
     return allExercises(state.customExercises)
@@ -211,6 +319,18 @@ function ExercisePicker({ open, mode, state, onClose, onPick }: {
       .sort((x, y) => x.name.localeCompare(y.name));
   }, [q, muscle, all, mode, state.customExercises]);
 
+  const recent = !q.trim() && muscle === 'all' ? list.filter((e) => recentIds.includes(e.id)) : [];
+  const rest = list.filter((e) => !recent.includes(e));
+
+  const row = (e: Exercise) => (
+    <li key={e.id}>
+      <button onClick={() => onPick(e.id)} className={inWorkout.has(e.id) ? 'in-workout' : ''}>
+        <span>{e.name}{e.custom && <span className="tag">custom</span>}{inWorkout.has(e.id) && <span className="tag tag-on">added</span>}</span>
+        <span className="muted small">{MUSCLE_LABEL[e.muscle]} · {e.stat.toUpperCase()}</span>
+      </button>
+    </li>
+  );
+
   return (
     <Sheet open={open} onClose={onClose} title="Add exercise">
       {creating ? (
@@ -218,7 +338,7 @@ function ExercisePicker({ open, mode, state, onClose, onPick }: {
           onCreate={(id) => { setCreating(false); onPick(id); }} />
       ) : (
         <>
-          <input className="search" placeholder="Search exercises…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="search" type="search" placeholder="Search exercises…" value={q} onChange={(e) => setQ(e.target.value)} />
           <div className="chips">
             <button className={`chip ${!all ? 'on' : ''}`} onClick={() => setAll(!all)}>
               {all ? 'All gates' : MODE_META[mode].label}
@@ -229,16 +349,16 @@ function ExercisePicker({ open, mode, state, onClose, onPick }: {
               </button>
             ))}
           </div>
+          {recent.length > 0 && (
+            <>
+              <div className="pick-head">Recent</div>
+              <ul className="pick-list">{recent.map(row)}</ul>
+              <div className="pick-head">All</div>
+            </>
+          )}
           <ul className="pick-list">
-            {list.map((e) => (
-              <li key={e.id}>
-                <button onClick={() => onPick(e.id)}>
-                  <span>{e.name}{e.custom && <span className="tag">custom</span>}</span>
-                  <span className="muted small">{MUSCLE_LABEL[e.muscle]} · {e.stat.toUpperCase()}</span>
-                </button>
-              </li>
-            ))}
-            {!list.length && <li className="muted center">No match.</li>}
+            {rest.map(row)}
+            {!list.length && <li className="muted center">No match{!all ? ' — try "All gates"' : ''}.</li>}
           </ul>
           <button className="btn btn-outline block" onClick={() => setCreating(true)}>+ Create custom exercise</button>
         </>
@@ -288,20 +408,22 @@ export function GateCleared({ session, exMap, unit, onClose }: {
   session: Session; exMap: Map<string, Exercise>; unit: 'kg' | 'lb'; onClose: () => void;
 }) {
   const t = sessionTotals(session, exMap);
+  const xp = useCountUp(session.xp, 1200);
   return (
-    <div className="screen">
+    <div className="screen stagger">
       <Panel glow className="cleared">
+        <div className="cleared-rays" aria-hidden="true" />
         <SystemTag>GATE CLEARED</SystemTag>
-        <div className="cleared-xp mono">+{fmt(session.xp)} XP</div>
+        <div className="cleared-xp mono">+{fmt(xp)} XP</div>
         <div className="stat-row">
-          <div><strong>{t.minutes}</strong><span>min</span></div>
+          <div><strong>{t.minutes < 1 ? '<1' : t.minutes}</strong><span>min</span></div>
           <div><strong>{t.sets}</strong><span>sets</span></div>
           <div><strong>{fmt(t.reps)}</strong><span>reps</span></div>
           {t.volume > 0 && <div><strong>{fmtVolume(t.volume, unit)}</strong><span>moved</span></div>}
         </div>
       </Panel>
       {session.prs.length > 0 && (
-        <Panel title="⚡ Limit Breaks">
+        <Panel title="⚡ Limit Breaks" className="prs">
           <ul className="list">
             {session.prs.map((p, i) => (
               <li key={i}>
@@ -314,6 +436,22 @@ export function GateCleared({ session, exMap, unit, onClose }: {
           </ul>
         </Panel>
       )}
+      <Panel title="Loot">
+        <ul className="list">
+          {session.exercises.map((we, i) => {
+            const ex = exMap.get(we.exerciseId);
+            const xpEx = we.sets.reduce((s, set) => s + setXp(set, ex), 0);
+            return (
+              <li key={i}>
+                <span>{ex?.name} <span className="muted small">× {we.sets.length}</span></span>
+                <span className="mono small xp-text">+{xpEx}</span>
+              </li>
+            );
+          })}
+          <li><span className="muted">Clear bonus</span><span className="mono small xp-text">+{COMPLETION_XP}</span></li>
+          {session.prs.length > 0 && <li><span className="muted">Limit Break bonus</span><span className="mono small xp-text">+{session.prs.length * PR_XP}</span></li>}
+        </ul>
+      </Panel>
       <button className="btn btn-primary block" onClick={onClose}>Return to base</button>
     </div>
   );

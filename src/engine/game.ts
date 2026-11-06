@@ -262,6 +262,8 @@ export interface Summary {
   thisWeekDays: number;
   stats: Record<TrainStat | 'vit' | 'wil', number>;
   today: SessionTotals & { gates: number };
+  /** Level at the start of today — quest targets use this so they don't move mid-day. */
+  questLevel: number;
 }
 
 export function summarise(state: AppState, exMap: Map<string, Exercise>, now = Date.now()): Summary {
@@ -271,7 +273,7 @@ export function summarise(state: AppState, exMap: Map<string, Exercise>, now = D
   const todayNum = dayNumber(now);
   const today: Summary['today'] = { sets: 0, reps: 0, volume: 0, seconds: 0, minutes: 0, pushups: 0, gates: 0 };
   let volume = 0, reps = 0, seconds = 0, pushups = 0, squats = 0, prs = 0;
-  let nightOwl = 0, earlyBird = 0, longestMinutes = 0, maxSets = 0, sessionXpTotal = 0;
+  let nightOwl = 0, earlyBird = 0, longestMinutes = 0, maxSets = 0, sessionXpTotal = 0, todayXp = 0;
   const weekDays = new Map<number, Set<number>>();
 
   for (const s of state.sessions) {
@@ -290,6 +292,7 @@ export function summarise(state: AppState, exMap: Map<string, Exercise>, now = D
     if (!weekDays.has(wk)) weekDays.set(wk, new Set());
     weekDays.get(wk)!.add(day);
     if (day === todayNum) {
+      todayXp += s.xp;
       today.gates++; today.sets += t.sets; today.reps += t.reps; today.volume += t.volume;
       today.seconds += t.seconds; today.minutes += t.minutes; today.pushups += t.pushups;
     }
@@ -309,6 +312,7 @@ export function summarise(state: AppState, exMap: Map<string, Exercise>, now = D
   const questXp = Object.values(state.questClaims).reduce((a, b) => a + b, 0);
   const totalXp = sessionXpTotal + questXp;
   const level = levelFromXp(totalXp);
+  const questLevel = levelFromXp(totalXp - todayXp - (state.questClaims[dateKey(now)] ?? 0)).level;
   const st = streaks(trainingDays(state.sessions), todayNum);
   const questDays = Object.keys(state.questClaims).length;
   const goal = Math.max(1, state.profile.weeklyGoal);
@@ -327,5 +331,6 @@ export function summarise(state: AppState, exMap: Map<string, Exercise>, now = D
       wil: 10 + st.longest + questDays,
     },
     today,
+    questLevel,
   };
 }
